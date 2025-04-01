@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/components/ui/use-toast';
@@ -563,7 +562,8 @@ const SnakeGame: React.FC<SnakeGameProps> = ({ selectedSkin = 'classic' }) => {
     
   }, [snake, food, gameState, grassAnimFrame, skinColors]);
 
-  // Start the game
+  // Fix: The issue with the "Start Game" button not working
+  // Move the startGame function to be defined before handleKeyDown since handleKeyDown references it
   const startGame = useCallback(() => {
     if (gameState === 'GAME_OVER') {
       initGame();
@@ -582,25 +582,6 @@ const SnakeGame: React.FC<SnakeGameProps> = ({ selectedSkin = 'classic' }) => {
       }, GRASS_ANIMATION_INTERVAL);
     }
   }, [gameState, initGame, gameTick]);
-
-  // Pause the game
-  const pauseGame = useCallback(() => {
-    setGameState('PAUSED');
-    
-    if (gameLoopRef.current) {
-      clearInterval(gameLoopRef.current);
-      gameLoopRef.current = null;
-    }
-  }, []);
-
-  // Resume the game
-  const resumeGame = useCallback(() => {
-    setGameState('PLAYING');
-    
-    if (!gameLoopRef.current) {
-      gameLoopRef.current = setInterval(gameTick, GAME_SPEED);
-    }
-  }, [gameTick]);
 
   // Handle keyboard events
   const handleKeyDown = useCallback(
@@ -900,10 +881,4 @@ const SnakeGame: React.FC<SnakeGameProps> = ({ selectedSkin = 'classic' }) => {
       </div>
       
       <div className="mt-6 text-center text-xs text-gray-500">
-        <p>Use keyboard arrows or WASD to move. Space to pause/resume.</p>
-      </div>
-    </div>
-  );
-};
-
-export default SnakeGame;
+        <p>Use keyboard arrows or WASD to move
