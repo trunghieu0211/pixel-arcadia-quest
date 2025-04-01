@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { 
   TetrisBoard, 
@@ -30,7 +31,8 @@ const TetrisGame: React.FC = () => {
   const [gameOver, setGameOver] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [dropTime, setDropTime] = useState(() => calculateSpeed(0));
-  const dropInterval = useRef<number | null>(null);
+  // Change the type from number to NodeJS.Timeout | null to match setInterval's return type
+  const dropInterval = useRef<NodeJS.Timeout | null>(null);
   
   // Calculate shadow position
   const shadowPosition = calculateShadowPosition(board, currentPiece, position);
