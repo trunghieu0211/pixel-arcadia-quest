@@ -3,6 +3,7 @@ import React from 'react';
 import PageLayout from '../../components/layout/PageLayout';
 import { Link } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
+import SnakeGame from '../../components/games/snake/SnakeGame';
 
 const SnakePage: React.FC = () => {
   return (
@@ -27,11 +28,8 @@ const SnakePage: React.FC = () => {
         </p>
       </div>
       
-      <div className="flex justify-center items-center h-96 border-2 border-neon-green rounded-lg bg-black/50">
-        <div className="text-center">
-          <h3 className="text-2xl font-pixel text-neon-green mb-4 animate-pulse">COMING SOON</h3>
-          <p className="text-gray-400">Snake game is currently under development.</p>
-        </div>
+      <div className="flex justify-center">
+        <SnakeGame />
       </div>
     </PageLayout>
   );
