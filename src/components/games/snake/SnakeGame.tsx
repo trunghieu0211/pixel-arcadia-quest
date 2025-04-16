@@ -563,7 +563,7 @@ const SnakeGame: React.FC<SnakeGameProps> = ({ selectedSkin = 'classic' }) => {
     
   }, [snake, food, gameState, grassAnimFrame, skinColors]);
 
-  // Define the missing pause/resume functions
+  // Define the pause/resume functions that were referenced but not defined
   const pauseGame = useCallback(() => {
     setGameState('PAUSED');
     if (gameLoopRef.current) {

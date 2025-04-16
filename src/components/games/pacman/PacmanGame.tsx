@@ -1,965 +1,1019 @@
-
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/components/ui/use-toast';
-import { PacmanMaze, MazeType } from './PacmanMaze';
-import { Ghost } from './Ghost';
-import { Pacman } from './Pacman';
-import { Dot, PowerPellet } from './GameElements';
-import { cn } from '@/lib/utils';
+import Pacman from './Pacman';
+import Ghost from './Ghost';
 
 // Types
-type Direction = 'UP' | 'DOWN' | 'LEFT' | 'RIGHT';
-type GameState = 'IDLE' | 'PLAYING' | 'PAUSED' | 'GAME_OVER' | 'LEVEL_COMPLETE';
+type Direction = 'up' | 'down' | 'left' | 'right' | 'none';
 type Position = { x: number; y: number };
-type PowerUpState = {
-  active: boolean;
-  timeRemaining: number;
-  type: 'SPEED' | 'INVINCIBLE' | 'POWER_PELLET';
-};
+type Cell = 'empty' | 'wall' | 'dot' | 'energizer' | 'fruit';
+type GameStatus = 'IDLE' | 'PLAYING' | 'PAUSED' | 'LEVEL_COMPLETE' | 'GAME_OVER';
+type GhostMode = 'chase' | 'scatter' | 'frightened';
+type GhostType = 'blinky' | 'pinky' | 'inky' | 'clyde';
 
-// Constants
-const CELL_SIZE = 24; // Size of each cell in pixels
-const GAME_SPEED = 150; // ms between moves
-const POWER_UP_DURATION = 10000; // 10 seconds
-const GHOST_COUNT = 4;
-
-const COLORS = {
-  pacman: '#FFFF00', // Yellow
-  maze: {
-    default: '#0000FF', // Blue
-    neon: '#00FFFF', // Cyan
-    dark: '#000088', // Dark blue
-    retro: '#2121DE', // Classic arcade blue
-    modern: '#3333FF', // Brighter blue
-  },
-  dots: '#FFFFFF', // White
-  powerPellet: '#FFFFFF', // White with pulsing effect
-};
-
-interface PacmanGameProps {
-  selectedMaze: MazeType;
+interface GhostState {
+  position: Position;
+  direction: Direction;
+  targetPosition: Position;
+  mode: GhostMode;
+  type: GhostType;
+  color: string;
+  isActive: boolean;
+  homePosition: Position;
+  releaseTimer: number;
 }
 
-const PacmanGame: React.FC<PacmanGameProps> = ({ selectedMaze = 'classic' }) => {
-  const mainCanvasRef = useRef<HTMLCanvasElement>(null);
-  const effectsCanvasRef = useRef<HTMLCanvasElement>(null);
-  const miniMapCanvasRef = useRef<HTMLCanvasElement>(null);
-  
-  const [gameState, setGameState] = useState<GameState>('IDLE');
+// Constants
+const CELL_SIZE = 20;
+const GRID_WIDTH = 28;
+const GRID_HEIGHT = 31;
+const CANVAS_WIDTH = GRID_WIDTH * CELL_SIZE;
+const CANVAS_HEIGHT = GRID_HEIGHT * CELL_SIZE;
+const PACMAN_SPEED = 5; // cells per second
+const GHOST_SPEED = 4.5; // cells per second
+const FRIGHTENED_SPEED = 3; // cells per second
+const DOT_POINTS = 10;
+const ENERGIZER_POINTS = 50;
+const GHOST_POINTS = 200;
+const FRUIT_POINTS = 100;
+const FRIGHTENED_DURATION = 8000; // ms
+const LEVEL_COMPLETE_DELAY = 3000; // ms
+const GAME_OVER_DELAY = 3000; // ms
+
+// Ghost colors
+const GHOST_COLORS = {
+  blinky: '#FF0000', // Red
+  pinky: '#FFB8FF',  // Pink
+  inky: '#00FFFF',   // Cyan
+  clyde: '#FFB852'   // Orange
+};
+
+// Initial maze layout (simplified)
+// 0 = empty, 1 = wall, 2 = dot, 3 = energizer, 4 = fruit, 5 = ghost house
+const INITIAL_MAZE = [
+  [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+  [1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1],
+  [1, 2, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 2, 1, 1, 2, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 2, 1],
+  [1, 3, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 2, 1, 1, 2, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 3, 1],
+  [1, 2, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 2, 1, 1, 2, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 2, 1],
+  [1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1],
+  [1, 2, 1, 1, 1, 1, 2, 1, 1, 2, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 2, 1, 1, 1, 1, 2, 1],
+  [1, 2, 1, 1, 1, 1, 2, 1, 1, 2, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 2, 1, 1, 1, 1, 2, 1],
+  [1, 2, 2, 2, 2, 2, 2, 1, 1, 2, 2, 2, 2, 1, 1, 2, 2, 2, 2, 1, 1, 2, 2, 2, 2, 2, 2, 1],
+  [1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 0, 1, 1, 0, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1],
+  [0, 0, 0, 0, 0, 1, 2, 1, 1, 1, 1, 1, 0, 1, 1, 0, 1, 1, 1, 1, 1, 2, 1, 0, 0, 0, 0, 0],
+  [0, 0, 0, 0, 0, 1, 2, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 2, 1, 0, 0, 0, 0, 0],
+  [0, 0, 0, 0, 0, 1, 2, 1, 1, 0, 1, 1, 1, 5, 5, 1, 1, 1, 0, 1, 1, 2, 1, 0, 0, 0, 0, 0],
+  [1, 1, 1, 1, 1, 1, 2, 1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 1, 1, 2, 1, 1, 1, 1, 1, 1],
+  [0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0],
+  [1, 1, 1, 1, 1, 1, 2, 1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 1, 1, 2, 1, 1, 1, 1, 1, 1],
+  [0, 0, 0, 0, 0, 1, 2, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 2, 1, 0, 0, 0, 0, 0],
+  [0, 0, 0, 0, 0, 1, 2, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 2, 1, 0, 0, 0, 0, 0],
+  [0, 0, 0, 0, 0, 1, 2, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 2, 1, 0, 0, 0, 0, 0],
+  [1, 1, 1, 1, 1, 1, 2, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 2, 1, 1, 1, 1, 1, 1],
+  [1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1],
+  [1, 2, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 2, 1, 1, 2, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 2, 1],
+  [1, 2, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 2, 1, 1, 2, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 2, 1],
+  [1, 3, 2, 2, 1, 1, 2, 2, 2, 2, 2, 2, 2, 0, 0, 2, 2, 2, 2, 2, 2, 2, 1, 1, 2, 2, 3, 1],
+  [1, 1, 1, 2, 1, 1, 2, 1, 1, 2, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 2, 1, 1, 2, 1, 1, 1],
+  [1, 1, 1, 2, 1, 1, 2, 1, 1, 2, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 2, 1, 1, 2, 1, 1, 1],
+  [1, 2, 2, 2, 2, 2, 2, 1, 1, 2, 2, 2, 2, 1, 1, 2, 2, 2, 2, 1, 1, 2, 2, 2, 2, 2, 2, 1],
+  [1, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1],
+  [1, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1],
+  [1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1],
+  [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+];
+
+interface PacmanGameProps {
+  theme?: 'classic' | 'neon' | 'retro';
+}
+
+const PacmanGame: React.FC<PacmanGameProps> = ({ theme = 'neon' }) => {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const svgRef = useRef<SVGSVGElement>(null);
+  const [gameStatus, setGameStatus] = useState<GameStatus>('IDLE');
   const [score, setScore] = useState(0);
   const [highScore, setHighScore] = useState(0);
-  const [lives, setLives] = useState(3);
   const [level, setLevel] = useState(1);
-  
-  const [pacmanPosition, setPacmanPosition] = useState<Position>({ x: 1, y: 1 });
-  const [pacmanDirection, setPacmanDirection] = useState<Direction>('RIGHT');
-  const [pacmanNextDirection, setPacmanNextDirection] = useState<Direction>('RIGHT');
-  const [pacmanMouthOpen, setPacmanMouthOpen] = useState(true);
-  
-  const [ghosts, setGhosts] = useState<Array<{
-    position: Position;
-    direction: Direction;
-    color: string;
-    frightened: boolean;
-  }>>([]);
-  
-  const [dots, setDots] = useState<Position[]>([]);
-  const [powerPellets, setPowerPellets] = useState<Position[]>([]);
-  const [powerUp, setPowerUp] = useState<PowerUpState>({
-    active: false,
-    timeRemaining: 0,
-    type: 'POWER_PELLET',
-  });
-  
-  const [mazeData, setMazeData] = useState<number[][]>([]);
-  const [mazeSize, setMazeSize] = useState({ width: 0, height: 0 });
-  const [cameraZoom, setCameraZoom] = useState(1);
-  
-  const gameLoopRef = useRef<NodeJS.Timeout | null>(null);
-  const mouthAnimationRef = useRef<NodeJS.Timeout | null>(null);
-  const powerUpTimerRef = useRef<NodeJS.Timeout | null>(null);
-  
+  const [lives, setLives] = useState(3);
+  const [maze, setMaze] = useState<Cell[][]>([]);
+  const [dotsRemaining, setDotsRemaining] = useState(0);
+  const [pacmanPosition, setPacmanPosition] = useState<Position>({ x: 14, y: 23 });
+  const [pacmanDirection, setPacmanDirection] = useState<Direction>('none');
+  const [pacmanNextDirection, setPacmanNextDirection] = useState<Direction>('none');
+  const [pacmanMouthOpen, setPacmanMouthOpen] = useState(0.5);
+  const [pacmanEnergized, setPacmanEnergized] = useState(false);
+  const [ghosts, setGhosts] = useState<GhostState[]>([]);
+  const [frightenedTimer, setFrightenedTimer] = useState<NodeJS.Timeout | null>(null);
+  const [levelCompleteTimer, setLevelCompleteTimer] = useState<NodeJS.Timeout | null>(null);
+  const [gameOverTimer, setGameOverTimer] = useState<NodeJS.Timeout | null>(null);
+  const [animationFrameId, setAnimationFrameId] = useState<number | null>(null);
+  const [lastFrameTime, setLastFrameTime] = useState(0);
+  const [mouthAnimationDirection, setMouthAnimationDirection] = useState(1);
   const { toast } = useToast();
+
+  // Theme colors
+  const themeColors = {
+    classic: {
+      background: '#000000',
+      wall: '#2121DE',
+      dot: '#FFFFFF',
+      energizer: '#FFFFFF',
+      text: '#FFFFFF',
+      fruit: '#FF0000',
+    },
+    neon: {
+      background: '#000000',
+      wall: '#00FFFF',
+      dot: '#FF00FF',
+      energizer: '#FFFF00',
+      text: '#00FF00',
+      fruit: '#FF0000',
+    },
+    retro: {
+      background: '#111111',
+      wall: '#663399',
+      dot: '#FFCC00',
+      energizer: '#FF6600',
+      text: '#FFFFFF',
+      fruit: '#00FF00',
+    }
+  };
+
+  const colors = themeColors[theme];
 
   // Initialize the game
   const initGame = useCallback(() => {
-    // Clear any existing timers
-    if (gameLoopRef.current) {
-      clearInterval(gameLoopRef.current);
-      gameLoopRef.current = null;
-    }
-    
-    if (mouthAnimationRef.current) {
-      clearInterval(mouthAnimationRef.current);
-      mouthAnimationRef.current = null;
-    }
-    
-    if (powerUpTimerRef.current) {
-      clearInterval(powerUpTimerRef.current);
-      powerUpTimerRef.current = null;
-    }
-    
-    // Initialize maze data based on selected maze
-    const { maze, pacmanStart, ghostStarts, dotPositions, powerPelletPositions } = 
-      PacmanMaze.getMaze(selectedMaze);
-    
-    setMazeData(maze);
-    setMazeSize({
-      width: maze[0].length,
-      height: maze.length,
-    });
-    
-    // Initialize pacman
-    setPacmanPosition(pacmanStart);
-    setPacmanDirection('RIGHT');
-    setPacmanNextDirection('RIGHT');
-    setPacmanMouthOpen(true);
-    
-    // Initialize ghosts
-    setGhosts(
-      ghostStarts.map((pos, index) => ({
-        position: pos,
-        direction: ['UP', 'DOWN', 'LEFT', 'RIGHT'][index % 4] as Direction,
-        color: ['#FF0000', '#FFC0CB', '#00FFFF', '#FFA500'][index % 4],
-        frightened: false,
-      }))
+    // Convert the initial maze to the Cell type
+    const newMaze: Cell[][] = INITIAL_MAZE.map(row => 
+      row.map(cell => {
+        switch(cell) {
+          case 0: return 'empty';
+          case 1: return 'wall';
+          case 2: return 'dot';
+          case 3: return 'energizer';
+          case 4: return 'fruit';
+          case 5: return 'empty'; // Ghost house is empty for movement
+          default: return 'empty';
+        }
+      })
     );
     
-    // Initialize dots and power pellets
-    setDots(dotPositions);
-    setPowerPellets(powerPelletPositions);
+    setMaze(newMaze);
+    
+    // Count dots
+    let dots = 0;
+    newMaze.forEach(row => {
+      row.forEach(cell => {
+        if (cell === 'dot' || cell === 'energizer') {
+          dots++;
+        }
+      });
+    });
+    setDotsRemaining(dots);
+    
+    // Reset pacman
+    setPacmanPosition({ x: 14, y: 23 });
+    setPacmanDirection('none');
+    setPacmanNextDirection('none');
+    setPacmanMouthOpen(0.5);
+    setPacmanEnergized(false);
+    
+    // Initialize ghosts
+    const initialGhosts: GhostState[] = [
+      {
+        position: { x: 13.5, y: 13 },
+        direction: 'left',
+        targetPosition: { x: 0, y: 0 },
+        mode: 'scatter',
+        type: 'blinky',
+        color: GHOST_COLORS.blinky,
+        isActive: true,
+        homePosition: { x: 13.5, y: 13 },
+        releaseTimer: 0
+      },
+      {
+        position: { x: 14.5, y: 13 },
+        direction: 'right',
+        targetPosition: { x: GRID_WIDTH - 1, y: 0 },
+        mode: 'scatter',
+        type: 'pinky',
+        color: GHOST_COLORS.pinky,
+        isActive: true,
+        homePosition: { x: 14.5, y: 13 },
+        releaseTimer: 2000
+      },
+      {
+        position: { x: 13.5, y: 14 },
+        direction: 'up',
+        targetPosition: { x: 0, y: GRID_HEIGHT - 1 },
+        mode: 'scatter',
+        type: 'inky',
+        color: GHOST_COLORS.inky,
+        isActive: false,
+        homePosition: { x: 13.5, y: 14 },
+        releaseTimer: 4000
+      },
+      {
+        position: { x: 14.5, y: 14 },
+        direction: 'down',
+        targetPosition: { x: GRID_WIDTH - 1, y: GRID_HEIGHT - 1 },
+        mode: 'scatter',
+        type: 'clyde',
+        color: GHOST_COLORS.clyde,
+        isActive: false,
+        homePosition: { x: 14.5, y: 14 },
+        releaseTimer: 6000
+      }
+    ];
+    
+    setGhosts(initialGhosts);
     
     // Reset game state
     setScore(0);
     setLives(3);
     setLevel(1);
-    setPowerUp({
-      active: false,
-      timeRemaining: 0,
-      type: 'POWER_PELLET',
-    });
-    setCameraZoom(1);
+    setGameStatus('IDLE');
     
-    // Reset game state
-    setGameState('IDLE');
+    // Clear any existing timers
+    if (frightenedTimer) {
+      clearTimeout(frightenedTimer);
+      setFrightenedTimer(null);
+    }
     
-    // Draw the initial state
-    requestAnimationFrame(draw);
-  }, [selectedMaze]);
+    if (levelCompleteTimer) {
+      clearTimeout(levelCompleteTimer);
+      setLevelCompleteTimer(null);
+    }
+    
+    if (gameOverTimer) {
+      clearTimeout(gameOverTimer);
+      setGameOverTimer(null);
+    }
+    
+    if (animationFrameId) {
+      cancelAnimationFrame(animationFrameId);
+      setAnimationFrameId(null);
+    }
+    
+  }, [frightenedTimer, levelCompleteTimer, gameOverTimer, animationFrameId]);
 
-  // Main game logic function - move pacman, check collisions, etc.
-  const gameTick = useCallback(() => {
-    if (gameState !== 'PLAYING') return;
+  // Start the game
+  const startGame = useCallback(() => {
+    if (gameStatus === 'GAME_OVER') {
+      initGame();
+    }
     
-    // Move Pacman
-    setPacmanPosition((prevPos) => {
-      // Try to move in the next direction if possible
-      const nextPos = getNextPosition(prevPos, pacmanNextDirection);
-      if (isValidMove(nextPos)) {
-        setPacmanDirection(pacmanNextDirection);
-        return nextPos;
-      }
+    setGameStatus('PLAYING');
+    setLastFrameTime(performance.now());
+    
+    // Start the game loop
+    const animate = (time: number) => {
+      const deltaTime = time - lastFrameTime;
+      setLastFrameTime(time);
       
-      // If not possible, continue in the current direction
-      const currentNextPos = getNextPosition(prevPos, pacmanDirection);
-      if (isValidMove(currentNextPos)) {
-        return currentNextPos;
-      }
+      // Update game state
+      updateGame(deltaTime);
       
-      // If can't move at all, stay in place
-      return prevPos;
-    });
+      // Continue the animation loop
+      const id = requestAnimationFrame(animate);
+      setAnimationFrameId(id);
+    };
     
-    // Animate Pacman's mouth
-    setPacmanMouthOpen((prev) => !prev);
+    const id = requestAnimationFrame(animate);
+    setAnimationFrameId(id);
+  }, [gameStatus, lastFrameTime, initGame]);
+
+  // Pause the game
+  const pauseGame = useCallback(() => {
+    if (gameStatus === 'PLAYING') {
+      setGameStatus('PAUSED');
+      
+      if (animationFrameId) {
+        cancelAnimationFrame(animationFrameId);
+        setAnimationFrameId(null);
+      }
+    }
+  }, [gameStatus, animationFrameId]);
+
+  // Resume the game
+  const resumeGame = useCallback(() => {
+    if (gameStatus === 'PAUSED') {
+      setGameStatus('PLAYING');
+      setLastFrameTime(performance.now());
+      
+      const animate = (time: number) => {
+        const deltaTime = time - lastFrameTime;
+        setLastFrameTime(time);
+        
+        // Update game state
+        updateGame(deltaTime);
+        
+        // Continue the animation loop
+        const id = requestAnimationFrame(animate);
+        setAnimationFrameId(id);
+      };
+      
+      const id = requestAnimationFrame(animate);
+      setAnimationFrameId(id);
+    }
+  }, [gameStatus, lastFrameTime]);
+
+  // Handle keyboard input
+  const handleKeyDown = useCallback((e: KeyboardEvent) => {
+    if (gameStatus !== 'PLAYING') return;
     
-    // Move ghosts
-    setGhosts((prevGhosts) => 
-      prevGhosts.map((ghost) => {
-        if (ghost.frightened) {
-          // Frightened ghosts move randomly
-          const possibleDirections = getPossibleDirections(ghost.position);
-          const randomDirection = possibleDirections[
-            Math.floor(Math.random() * possibleDirections.length)
-          ];
-          
-          return {
-            ...ghost,
-            position: getNextPosition(ghost.position, randomDirection),
-            direction: randomDirection,
-          };
-        } else {
-          // Normal ghosts use AI to target pacman
-          const newDirection = getGhostDirection(ghost.position, ghost.direction);
-          return {
-            ...ghost,
-            position: getNextPosition(ghost.position, newDirection),
-            direction: newDirection,
-          };
+    switch (e.key) {
+      case 'ArrowUp':
+      case 'w':
+      case 'W':
+        setPacmanNextDirection('up');
+        break;
+      case 'ArrowDown':
+      case 's':
+      case 'S':
+        setPacmanNextDirection('down');
+        break;
+      case 'ArrowLeft':
+      case 'a':
+      case 'A':
+        setPacmanNextDirection('left');
+        break;
+      case 'ArrowRight':
+      case 'd':
+      case 'D':
+        setPacmanNextDirection('right');
+        break;
+      case ' ':
+        // Space bar toggles pause
+        if (gameStatus === 'PLAYING') {
+          pauseGame();
+        } else if (gameStatus === 'PAUSED') {
+          resumeGame();
         }
-      })
-    );
-    
-    // Check for dot collection
-    setDots((prevDots) => {
-      const newDots = prevDots.filter(
-        (dot) => !(dot.x === pacmanPosition.x && dot.y === pacmanPosition.y)
-      );
-      
-      if (newDots.length !== prevDots.length) {
-        // Dot collected
-        setScore((prev) => prev + 10);
-      }
-      
-      return newDots;
-    });
-    
-    // Check for power pellet collection
-    setPowerPellets((prevPellets) => {
-      const newPellets = prevPellets.filter(
-        (pellet) => !(pellet.x === pacmanPosition.x && pellet.y === pacmanPosition.y)
-      );
-      
-      if (newPellets.length !== prevPellets.length) {
-        // Power pellet collected
-        setScore((prev) => prev + 50);
-        activatePowerUp('POWER_PELLET');
-      }
-      
-      return newPellets;
-    });
-    
-    // Check for ghost collisions
-    const collidedGhostIndex = ghosts.findIndex(
-      (ghost) => ghost.position.x === pacmanPosition.x && ghost.position.y === pacmanPosition.y
-    );
-    
-    if (collidedGhostIndex !== -1) {
-      const collidedGhost = ghosts[collidedGhostIndex];
-      
-      if (collidedGhost.frightened) {
-        // Eat the ghost
-        setScore((prev) => prev + 200);
-        setGhosts((prevGhosts) => 
-          prevGhosts.map((ghost, index) => 
-            index === collidedGhostIndex
-              ? {
-                  ...ghost,
-                  position: { x: Math.floor(mazeSize.width / 2), y: Math.floor(mazeSize.height / 2) },
-                  frightened: false,
-                }
-              : ghost
-          )
-        );
-      } else if (powerUp.active && powerUp.type === 'INVINCIBLE') {
-        // Invincible - do nothing
-      } else {
-        // Lose a life
-        setLives((prev) => {
-          const newLives = prev - 1;
-          if (newLives <= 0) {
-            endGame();
-          } else {
-            resetPositions();
-          }
-          return newLives;
-        });
-      }
+        break;
     }
-    
-    // Check for level completion
-    if (dots.length === 0 && powerPellets.length === 0) {
-      completeLevel();
-    }
-    
-    // Update power-up time
-    if (powerUp.active) {
-      setPowerUp((prev) => ({
-        ...prev,
-        timeRemaining: prev.timeRemaining - GAME_SPEED,
-      }));
-      
-      if (powerUp.timeRemaining <= 0) {
-        deactivatePowerUp();
-      }
-    }
-  }, [gameState, pacmanPosition, pacmanDirection, pacmanNextDirection, ghosts, dots, powerPellets, powerUp, mazeSize]);
+  }, [gameStatus, pauseGame, resumeGame]);
 
-  // Helper function to get valid next position
-  const getNextPosition = (position: Position, direction: Direction): Position => {
-    switch (direction) {
-      case 'UP':
-        return { x: position.x, y: position.y - 1 };
-      case 'DOWN':
-        return { x: position.x, y: position.y + 1 };
-      case 'LEFT':
-        return { x: position.x - 1, y: position.y };
-      case 'RIGHT':
-        return { x: position.x + 1, y: position.y };
-    }
-  };
-
-  // Helper function to check if a move is valid
-  const isValidMove = (position: Position): boolean => {
+  // Check if a position is valid for movement
+  const isValidMove = useCallback((position: Position): boolean => {
+    const gridX = Math.floor(position.x);
+    const gridY = Math.floor(position.y);
+    
     // Check if position is within bounds
-    if (
-      position.x < 0 ||
-      position.y < 0 ||
-      position.x >= mazeSize.width ||
-      position.y >= mazeSize.height
-    ) {
+    if (gridX < 0 || gridX >= GRID_WIDTH || gridY < 0 || gridY >= GRID_HEIGHT) {
       return false;
     }
     
     // Check if position is a wall
-    return mazeData[position.y][position.x] !== 1;
-  };
+    return maze[gridY][gridX] !== 'wall';
+  }, [maze]);
 
-  // Get possible directions for ghosts
-  const getPossibleDirections = (position: Position): Direction[] => {
-    const directions: Direction[] = ['UP', 'DOWN', 'LEFT', 'RIGHT'];
-    return directions.filter((dir) => isValidMove(getNextPosition(position, dir)));
-  };
+  // Get the next position based on current position and direction
+  const getNextPosition = useCallback((position: Position, direction: Direction, speed: number): Position => {
+    const moveDistance = speed / 1000; // Convert to cells per millisecond
+    
+    switch (direction) {
+      case 'up':
+        return { x: position.x, y: position.y - moveDistance };
+      case 'down':
+        return { x: position.x, y: position.y + moveDistance };
+      case 'left':
+        return { x: position.x - moveDistance, y: position.y };
+      case 'right':
+        return { x: position.x + moveDistance, y: position.y };
+      default:
+        return { ...position };
+    }
+  }, []);
 
-  // Simplified ghost AI
-  const getGhostDirection = (position: Position, currentDirection: Direction): Direction => {
-    // 80% chance to continue in same direction if possible
-    if (Math.random() < 0.8) {
-      const nextPos = getNextPosition(position, currentDirection);
-      if (isValidMove(nextPos)) {
-        return currentDirection;
+  // Check if pacman can change direction
+  const canChangeDirection = useCallback((position: Position, direction: Direction): boolean => {
+    // Check if we're at a grid cell center (or close enough)
+    const isAtGridCenter = 
+      Math.abs(position.x - Math.round(position.x)) < 0.1 && 
+      Math.abs(position.y - Math.round(position.y)) < 0.1;
+    
+    if (!isAtGridCenter) return false;
+    
+    // Check if the new direction is valid
+    const nextPos = getNextPosition(
+      { x: Math.round(position.x), y: Math.round(position.y) }, 
+      direction, 
+      PACMAN_SPEED
+    );
+    
+    return isValidMove(nextPos);
+  }, [getNextPosition, isValidMove]);
+
+  // Update pacman position and handle collisions
+  const updatePacman = useCallback((deltaTime: number) => {
+    // Animate mouth
+    setPacmanMouthOpen(prev => {
+      const newOpen = prev + (0.05 * mouthAnimationDirection);
+      if (newOpen >= 1) {
+        setMouthAnimationDirection(-1);
+        return 1;
+      } else if (newOpen <= 0) {
+        setMouthAnimationDirection(1);
+        return 0;
+      }
+      return newOpen;
+    });
+    
+    // Try to change direction if requested
+    if (pacmanNextDirection !== pacmanDirection && pacmanNextDirection !== 'none') {
+      if (canChangeDirection(pacmanPosition, pacmanNextDirection)) {
+        setPacmanDirection(pacmanNextDirection);
       }
     }
     
-    // Get all possible directions
-    const possibleDirections = getPossibleDirections(position);
-    if (possibleDirections.length === 0) return currentDirection;
-    
-    // Choose random direction
-    return possibleDirections[Math.floor(Math.random() * possibleDirections.length)];
-  };
-
-  // Activate a power-up
-  const activatePowerUp = (type: PowerUpState['type']) => {
-    setPowerUp({
-      active: true,
-      timeRemaining: POWER_UP_DURATION,
-      type,
-    });
-    
-    // Make ghosts frightened if it's a power pellet
-    if (type === 'POWER_PELLET') {
-      setGhosts((prevGhosts) =>
-        prevGhosts.map((ghost) => ({
-          ...ghost,
-          frightened: true,
-        }))
+    // Move pacman
+    if (pacmanDirection !== 'none') {
+      const nextPosition = getNextPosition(
+        pacmanPosition, 
+        pacmanDirection, 
+        PACMAN_SPEED * deltaTime
       );
       
-      // Add a screen flash effect
-      const effectsCanvas = effectsCanvasRef.current;
-      if (effectsCanvas) {
-        const ctx = effectsCanvas.getContext('2d');
-        if (ctx) {
-          ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
-          ctx.fillRect(0, 0, effectsCanvas.width, effectsCanvas.height);
-          setTimeout(() => {
-            ctx.clearRect(0, 0, effectsCanvas.width, effectsCanvas.height);
-          }, 300);
+      // Handle tunnel wrapping
+      if (nextPosition.x < 0) {
+        nextPosition.x = GRID_WIDTH - 0.5;
+      } else if (nextPosition.x >= GRID_WIDTH) {
+        nextPosition.x = 0;
+      }
+      
+      // Check if the move is valid
+      if (isValidMove(nextPosition)) {
+        setPacmanPosition(nextPosition);
+        
+        // Check for dot collection
+        const gridX = Math.floor(nextPosition.x);
+        const gridY = Math.floor(nextPosition.y);
+        
+        // Only collect if we're close to the center of the cell
+        const isNearCenter = 
+          Math.abs(nextPosition.x - (gridX + 0.5)) < 0.3 && 
+          Math.abs(nextPosition.y - (gridY + 0.5)) < 0.3;
+        
+        if (isNearCenter) {
+          if (maze[gridY][gridX] === 'dot') {
+            // Collect dot
+            const newMaze = [...maze];
+            newMaze[gridY][gridX] = 'empty';
+            setMaze(newMaze);
+            setScore(prev => prev + DOT_POINTS);
+            setDotsRemaining(prev => prev - 1);
+          } else if (maze[gridY][gridX] === 'energizer') {
+            // Collect energizer
+            const newMaze = [...maze];
+            newMaze[gridY][gridX] = 'empty';
+            setMaze(newMaze);
+            setScore(prev => prev + ENERGIZER_POINTS);
+            setDotsRemaining(prev => prev - 1);
+            
+            // Activate frightened mode
+            setPacmanEnergized(true);
+            
+            // Set all ghosts to frightened mode
+            setGhosts(prev => prev.map(ghost => ({
+              ...ghost,
+              mode: 'frightened',
+              direction: 
+                ghost.direction === 'up' ? 'down' :
+                ghost.direction === 'down' ? 'up' :
+                ghost.direction === 'left' ? 'right' :
+                'left'
+            })));
+            
+            // Clear existing frightened timer
+            if (frightenedTimer) {
+              clearTimeout(frightenedTimer);
+            }
+            
+            // Set new frightened timer
+            const timer = setTimeout(() => {
+              setPacmanEnergized(false);
+              setGhosts(prev => prev.map(ghost => ({
+                ...ghost,
+                mode: 'chase'
+              })));
+              setFrightenedTimer(null);
+            }, FRIGHTENED_DURATION);
+            
+            setFrightenedTimer(timer);
+          } else if (maze[gridY][gridX] === 'fruit') {
+            // Collect fruit
+            const newMaze = [...maze];
+            newMaze[gridY][gridX] = 'empty';
+            setMaze(newMaze);
+            setScore(prev => prev + FRUIT_POINTS);
+            
+            toast({
+              title: "Bonus!",
+              description: `+${FRUIT_POINTS} points`,
+              variant: "default"
+            });
+          }
+        }
+      } else {
+        // If we hit a wall, stop
+        setPacmanDirection('none');
+      }
+    }
+  }, [
+    pacmanPosition, 
+    pacmanDirection, 
+    pacmanNextDirection, 
+    mouthAnimationDirection, 
+    maze, 
+    canChangeDirection, 
+    getNextPosition, 
+    isValidMove, 
+    frightenedTimer,
+    toast
+  ]);
+
+  // Calculate target position for ghosts
+  const calculateGhostTarget = useCallback((ghost: GhostState): Position => {
+    if (ghost.mode === 'frightened') {
+      // Random target when frightened
+      return {
+        x: Math.floor(Math.random() * GRID_WIDTH),
+        y: Math.floor(Math.random() * GRID_HEIGHT)
+      };
+    }
+    
+    if (ghost.mode === 'scatter') {
+      // Each ghost has a home corner to scatter to
+      switch (ghost.type) {
+        case 'blinky': return { x: GRID_WIDTH - 2, y: 0 };
+        case 'pinky': return { x: 1, y: 0 };
+        case 'inky': return { x: GRID_WIDTH - 2, y: GRID_HEIGHT - 2 };
+        case 'clyde': return { x: 1, y: GRID_HEIGHT - 2 };
+      }
+    }
+    
+    // Chase mode - each ghost has a different targeting strategy
+    switch (ghost.type) {
+      case 'blinky': // Directly targets pacman
+        return { ...pacmanPosition };
+        
+      case 'pinky': // Targets 4 tiles ahead of pacman
+        const ahead = 4;
+        switch (pacmanDirection) {
+          case 'up':
+            return { x: pacmanPosition.x, y: pacmanPosition.y - ahead };
+          case 'down':
+            return { x: pacmanPosition.x, y: pacmanPosition.y + ahead };
+          case 'left':
+            return { x: pacmanPosition.x - ahead, y: pacmanPosition.y };
+          case 'right':
+            return { x: pacmanPosition.x + ahead, y: pacmanPosition.y };
+          default:
+            return { ...pacmanPosition };
+        }
+        
+      case 'inky': // Complex targeting using Blinky's position
+        const blinky = ghosts.find(g => g.type === 'blinky');
+        if (!blinky) return { ...pacmanPosition };
+        
+        // Get position 2 tiles ahead of pacman
+        let aheadX = pacmanPosition.x;
+        let aheadY = pacmanPosition.y;
+        
+        switch (pacmanDirection) {
+          case 'up':
+            aheadY -= 2;
+            break;
+          case 'down':
+            aheadY += 2;
+            break;
+          case 'left':
+            aheadX -= 2;
+            break;
+          case 'right':
+            aheadX += 2;
+            break;
+        }
+        
+        // Calculate vector from Blinky to the position ahead of Pacman
+        const vectorX = aheadX - blinky.position.x;
+        const vectorY = aheadY - blinky.position.y;
+        
+        // Double the vector to get Inky's target
+        return {
+          x: aheadX + vectorX,
+          y: aheadY + vectorY
+        };
+        
+      case 'clyde': // Targets pacman until close, then scatters
+        const distance = Math.sqrt(
+          Math.pow(ghost.position.x - pacmanPosition.x, 2) +
+          Math.pow(ghost.position.y - pacmanPosition.y, 2)
+        );
+        
+        // If Clyde is far from Pacman, chase him
+        if (distance > 8) {
+          return { ...pacmanPosition };
+        } 
+        // If Clyde is close to Pacman, go to scatter mode
+        else {
+          return { x: 1, y: GRID_HEIGHT - 2 };
+        }
+    }
+  }, [pacmanPosition, pacmanDirection, ghosts]);
+
+  // Get possible directions for a ghost
+  const getGhostPossibleDirections = useCallback((position: Position, currentDirection: Direction): Direction[] => {
+    const directions: Direction[] = ['up', 'down', 'left', 'right'];
+    
+    // Remove the opposite direction (ghosts can't turn around)
+    const oppositeDirection = 
+      currentDirection === 'up' ? 'down' :
+      currentDirection === 'down' ? 'up' :
+      currentDirection === 'left' ? 'right' :
+      currentDirection === 'right' ? 'left' :
+      'none';
+    
+    const validDirections = directions.filter(dir => {
+      if (dir === oppositeDirection) return false;
+      
+      const nextPos = getNextPosition(
+        { x: Math.round(position.x), y: Math.round(position.y) },
+        dir,
+        0.5 // Small step to check
+      );
+      
+      return isValidMove(nextPos);
+    });
+    
+    return validDirections.length > 0 ? validDirections : [currentDirection];
+  }, [getNextPosition, isValidMove]);
+
+  // Choose the best direction for a ghost to reach its target
+  const chooseGhostDirection = useCallback((ghost: GhostState): Direction => {
+    // Only change direction at grid intersections
+    const isAtGridCenter = 
+      Math.abs(ghost.position.x - Math.round(ghost.position.x)) < 0.1 && 
+      Math.abs(ghost.position.y - Math.round(ghost.position.y)) < 0.1;
+    
+    if (!isAtGridCenter) return ghost.direction;
+    
+    const possibleDirections = getGhostPossibleDirections(ghost.position, ghost.direction);
+    
+    // If frightened, choose a random direction
+    if (ghost.mode === 'frightened') {
+      return possibleDirections[Math.floor(Math.random() * possibleDirections.length)];
+    }
+    
+    // Otherwise, choose the direction that gets closest to the target
+    let bestDirection = ghost.direction;
+    let bestDistance = Infinity;
+    
+    possibleDirections.forEach(dir => {
+      const nextPos = getNextPosition(
+        { x: Math.round(ghost.position.x), y: Math.round(ghost.position.y) },
+        dir,
+        1 // One full step
+      );
+      
+      const distance = Math.sqrt(
+        Math.pow(nextPos.x - ghost.targetPosition.x, 2) +
+        Math.pow(nextPos.y - ghost.targetPosition.y, 2)
+      );
+      
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        bestDirection = dir;
+      }
+    });
+    
+    return bestDirection;
+  }, [getGhostPossibleDirections, getNextPosition]);
+
+  // Update ghost positions and handle collisions
+  const updateGhosts = useCallback((deltaTime: number) => {
+    setGhosts(prev => {
+      const updatedGhosts = prev.map(ghost => {
+        // Skip inactive ghosts
+        if (!ghost.isActive) {
+          // Decrease release timer
+          const newReleaseTimer = Math.max(0, ghost.releaseTimer - deltaTime);
+          
+          // Activate ghost if timer is up
+          if (newReleaseTimer === 0 && ghost.releaseTimer > 0) {
+            return {
+              ...ghost,
+              isActive: true,
+              releaseTimer: 0
+            };
+          }
+          
+          return {
+            ...ghost,
+            releaseTimer: newReleaseTimer
+          };
+        }
+        
+        // Update target position
+        const targetPosition = calculateGhostTarget(ghost);
+        
+        // Choose direction
+        const direction = chooseGhostDirection({
+          ...ghost,
+          targetPosition
+        });
+        
+        // Move ghost
+        const speed = ghost.mode === 'frightened' ? FRIGHTENED_SPEED : GHOST_SPEED;
+        const nextPosition = getNextPosition(ghost.position, direction, speed * deltaTime);
+        
+        // Handle tunnel wrapping
+        if (nextPosition.x < 0) {
+          nextPosition.x = GRID_WIDTH - 0.5;
+        } else if (nextPosition.x >= GRID_WIDTH) {
+          nextPosition.x = 0;
+        }
+        
+        // Check if the move is valid
+        if (isValidMove(nextPosition)) {
+          return {
+            ...ghost,
+            position: nextPosition,
+            direction,
+            targetPosition
+          };
+        } else {
+          // If we hit a wall, choose a new direction
+          const newDirection = getGhostPossibleDirections(ghost.position, ghost.direction)[0];
+          return {
+            ...ghost,
+            direction: newDirection,
+            targetPosition
+          };
+        }
+      });
+      
+      return updatedGhosts;
+    });
+    
+    // Check for collisions with pacman
+    ghosts.forEach(ghost => {
+      const distance = Math.sqrt(
+        Math.pow(ghost.position.x - pacmanPosition.x, 2) +
+        Math.pow(ghost.position.y - pacmanPosition.y, 2)
+      );
+      
+      if (distance < 0.7) { // Close enough for collision
+        if (ghost.mode === 'frightened') {
+          // Pacman eats the ghost
+          setScore(prev => prev + GHOST_POINTS);
+          
+          // Reset ghost to home
+          setGhosts(prev => prev.map(g => {
+            if (g.type === ghost.type) {
+              return {
+                ...g,
+                position: { ...g.homePosition },
+                direction: 'left',
+                mode: 'scatter'
+              };
+            }
+            return g;
+          }));
+          
+          toast({
+            title: "Ghost eaten!",
+            description: `+${GHOST_POINTS} points`,
+            variant: "default"
+          });
+        } else {
+          // Ghost catches pacman
+          handlePacmanCaught();
         }
       }
-    }
+    });
+  }, [
+    calculateGhostTarget, 
+    chooseGhostDirection, 
+    getNextPosition, 
+    isValidMove, 
+    getGhostPossibleDirections, 
+    ghosts, 
+    pacmanPosition,
+    toast
+  ]);
+
+  // Handle pacman being caught by a ghost
+  const handlePacmanCaught = useCallback(() => {
+    // Stop the game temporarily
+    setGameStatus('PAUSED');
     
-    // Slow down game if it's a speed power-up
-    if (type === 'SPEED') {
-      if (gameLoopRef.current) {
-        clearInterval(gameLoopRef.current);
-        gameLoopRef.current = setInterval(gameTick, GAME_SPEED * 1.5);
+    // Decrease lives
+    setLives(prev => prev - 1);
+    
+    if (lives - 1 <= 0) {
+      // Game over
+      if (score > highScore) {
+        setHighScore(score);
       }
-    }
-    
-    // Set a timer to deactivate the power-up
-    if (powerUpTimerRef.current) {
-      clearTimeout(powerUpTimerRef.current);
-    }
-    powerUpTimerRef.current = setTimeout(() => {
-      deactivatePowerUp();
-    }, POWER_UP_DURATION);
-  };
-
-  // Deactivate the current power-up
-  const deactivatePowerUp = () => {
-    setPowerUp({
-      active: false,
-      timeRemaining: 0,
-      type: 'POWER_PELLET',
-    });
-    
-    // Reset ghosts to normal
-    setGhosts((prevGhosts) =>
-      prevGhosts.map((ghost) => ({
-        ...ghost,
-        frightened: false,
-      }))
-    );
-    
-    // Reset game speed if needed
-    if (powerUp.type === 'SPEED' && gameLoopRef.current) {
-      clearInterval(gameLoopRef.current);
-      gameLoopRef.current = setInterval(gameTick, GAME_SPEED);
-    }
-  };
-
-  // Reset positions after losing a life
-  const resetPositions = () => {
-    // Get pacman and ghost starting positions
-    const { pacmanStart, ghostStarts } = PacmanMaze.getMaze(selectedMaze);
-    
-    // Reset pacman
-    setPacmanPosition(pacmanStart);
-    setPacmanDirection('RIGHT');
-    setPacmanNextDirection('RIGHT');
-    
-    // Reset ghosts
-    setGhosts((prevGhosts) =>
-      prevGhosts.map((ghost, index) => ({
-        ...ghost,
-        position: ghostStarts[index % ghostStarts.length],
-        frightened: false,
-      }))
-    );
-    
-    // Deactivate any active power-ups
-    deactivatePowerUp();
-    
-    // Pause briefly
-    setGameState('PAUSED');
-    setTimeout(() => {
-      setGameState('PLAYING');
-    }, 1000);
-  };
-
-  // Complete a level
-  const completeLevel = () => {
-    setGameState('LEVEL_COMPLETE');
-    
-    // Clear game loop
-    if (gameLoopRef.current) {
-      clearInterval(gameLoopRef.current);
-      gameLoopRef.current = null;
-    }
-    
-    // Show toast
-    toast({
-      title: "Level Complete!",
-      description: `Score: ${score}`,
-      variant: "default",
-    });
-    
-    // Move to next level after a delay
-    setTimeout(() => {
-      setLevel((prev) => prev + 1);
       
-      // Reinitialize the game with increased difficulty
-      initGame();
-    }, 3000);
-  };
+      toast({
+        title: "Game Over!",
+        description: `Final score: ${score}`,
+        variant: "destructive"
+      });
+      
+      const timer = setTimeout(() => {
+        setGameStatus('GAME_OVER');
+        setGameOverTimer(null);
+      }, GAME_OVER_DELAY);
+      
+      setGameOverTimer(timer);
+    } else {
+      // Reset positions but continue game
+      setPacmanPosition({ x: 14, y: 23 });
+      setPacmanDirection('none');
+      setPacmanNextDirection('none');
+      
+      // Reset ghosts
+      setGhosts(prev => prev.map(ghost => ({
+        ...ghost,
+        position: { ...ghost.homePosition },
+        direction: 'left',
+        mode: 'scatter'
+      })));
+      
+      // Resume after a short delay
+      setTimeout(() => {
+        setGameStatus('PLAYING');
+      }, 1000);
+    }
+  }, [lives, score, highScore, toast]);
 
-  // End game
-  const endGame = () => {
-    setGameState('GAME_OVER');
-    
-    // Clear game loop
-    if (gameLoopRef.current) {
-      clearInterval(gameLoopRef.current);
-      gameLoopRef.current = null;
+  // Check if level is complete
+  const checkLevelComplete = useCallback(() => {
+    if (dotsRemaining <= 0) {
+      // Level complete
+      setGameStatus('LEVEL_COMPLETE');
+      
+      toast({
+        title: "Level Complete!",
+        description: `Moving to level ${level + 1}`,
+        variant: "default"
+      });
+      
+      const timer = setTimeout(() => {
+        // Increase level
+        setLevel(prev => prev + 1);
+        
+        // Reset the maze but keep score and lives
+        const newMaze: Cell[][] = INITIAL_MAZE.map(row => 
+          row.map(cell => {
+            switch(cell) {
+              case 0: return 'empty';
+              case 1: return 'wall';
+              case 2: return 'dot';
+              case 3: return 'energizer';
+              case 4: return 'fruit';
+              case 5: return 'empty'; // Ghost house is empty for movement
+              default: return 'empty';
+            }
+          })
+        );
+        
+        setMaze(newMaze);
+        
+        // Count dots
+        let dots = 0;
+        newMaze.forEach(row => {
+          row.forEach(cell => {
+            if (cell === 'dot' || cell === 'energizer') {
+              dots++;
+            }
+          });
+        });
+        setDotsRemaining(dots);
+        
+        // Reset positions
+        setPacmanPosition({ x: 14, y: 23 });
+        setPacmanDirection('none');
+        setPacmanNextDirection('none');
+        
+        // Reset ghosts with faster speed for higher levels
+        setGhosts(prev => prev.map(ghost => ({
+          ...ghost,
+          position: { ...ghost.homePosition },
+          direction: 'left',
+          mode: 'scatter',
+          isActive: ghost.type === 'blinky' || ghost.type === 'pinky'
+        })));
+        
+        // Resume game
+        setGameStatus('PLAYING');
+        setLevelCompleteTimer(null);
+      }, LEVEL_COMPLETE_DELAY);
+      
+      setLevelCompleteTimer(timer);
     }
+  }, [dotsRemaining, level, toast]);
+
+  // Main game update function
+  const updateGame = useCallback((deltaTime: number) => {
+    if (gameStatus !== 'PLAYING') return;
     
-    // Update high score if needed
-    if (score > highScore) {
-      setHighScore(score);
-    }
-    
-    // Show toast
-    toast({
-      title: "Game Over!",
-      description: `Final Score: ${score}`,
-      variant: "destructive",
-    });
-  };
+    updatePacman(deltaTime);
+    updateGhosts(deltaTime);
+    checkLevelComplete();
+  }, [gameStatus, updatePacman, updateGhosts, checkLevelComplete]);
 
   // Draw the game
-  const draw = useCallback(() => {
-    const canvas = mainCanvasRef.current;
-    const effectsCanvas = effectsCanvasRef.current;
-    const miniMapCanvas = miniMapCanvasRef.current;
-    
-    if (!canvas || !effectsCanvas || !miniMapCanvas || !mazeData.length) return;
+  const drawGame = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
     
     const ctx = canvas.getContext('2d');
-    const effectsCtx = effectsCanvas.getContext('2d');
-    const miniMapCtx = miniMapCanvas.getContext('2d');
+    if (!ctx) return;
     
-    if (!ctx || !effectsCtx || !miniMapCtx) return;
-    
-    // Clear canvases
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    effectsCtx.clearRect(0, 0, effectsCanvas.width, effectsCanvas.height);
-    miniMapCtx.clearRect(0, 0, miniMapCanvas.width, miniMapCanvas.height);
-    
-    // Set canvas sizes based on maze dimensions
-    const canvasWidth = mazeSize.width * CELL_SIZE;
-    const canvasHeight = mazeSize.height * CELL_SIZE;
-    
-    canvas.width = canvasWidth;
-    canvas.height = canvasHeight;
-    effectsCanvas.width = canvasWidth;
-    effectsCanvas.height = canvasHeight;
-    
-    // Apply zoom effect
-    ctx.save();
-    ctx.scale(cameraZoom, cameraZoom);
-    effectsCtx.save();
-    effectsCtx.scale(cameraZoom, cameraZoom);
+    // Clear canvas
+    ctx.fillStyle = colors.background;
+    ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
     
     // Draw maze
-    for (let y = 0; y < mazeSize.height; y++) {
-      for (let x = 0; x < mazeSize.width; x++) {
-        const cell = mazeData[y][x];
+    maze.forEach((row, y) => {
+      row.forEach((cell, x) => {
+        const cellX = x * CELL_SIZE;
+        const cellY = y * CELL_SIZE;
         
-        if (cell === 1) {
-          // Wall
-          const baseColor = COLORS.maze[selectedMaze as keyof typeof COLORS.maze] || COLORS.maze.default;
-          
-          // Create gradient for walls
-          const gradient = ctx.createLinearGradient(
-            x * CELL_SIZE,
-            y * CELL_SIZE,
-            (x + 1) * CELL_SIZE,
-            (y + 1) * CELL_SIZE
-          );
-          
-          gradient.addColorStop(0, baseColor);
-          gradient.addColorStop(1, shadeColor(baseColor, -20));
-          
-          ctx.fillStyle = gradient;
-          ctx.fillRect(x * CELL_SIZE, y * CELL_SIZE, CELL_SIZE, CELL_SIZE);
-          
-          // Add neon glow effect to walls
-          effectsCtx.shadowBlur = 8;
-          effectsCtx.shadowColor = baseColor;
-          effectsCtx.strokeStyle = lightenColor(baseColor, 30);
-          effectsCtx.lineWidth = 2;
-          effectsCtx.strokeRect(x * CELL_SIZE + 1, y * CELL_SIZE + 1, CELL_SIZE - 2, CELL_SIZE - 2);
-          effectsCtx.shadowBlur = 0;
-        }
-      }
-    }
-    
-    // Draw dots
-    dots.forEach((dot) => {
-      // Regular dot
-      ctx.fillStyle = COLORS.dots;
-      ctx.beginPath();
-      ctx.arc(
-        dot.x * CELL_SIZE + CELL_SIZE / 2,
-        dot.y * CELL_SIZE + CELL_SIZE / 2,
-        CELL_SIZE / 8,
-        0,
-        Math.PI * 2
-      );
-      ctx.fill();
-    });
-    
-    // Draw power pellets with pulsing effect
-    powerPellets.forEach((pellet) => {
-      const pulseSize = Math.sin(Date.now() / 200) * 2 + 6;
-      
-      // Glow effect
-      effectsCtx.shadowBlur = 10;
-      effectsCtx.shadowColor = COLORS.powerPellet;
-      
-      effectsCtx.fillStyle = COLORS.powerPellet;
-      effectsCtx.beginPath();
-      effectsCtx.arc(
-        pellet.x * CELL_SIZE + CELL_SIZE / 2,
-        pellet.y * CELL_SIZE + CELL_SIZE / 2,
-        pulseSize,
-        0,
-        Math.PI * 2
-      );
-      effectsCtx.fill();
-      
-      effectsCtx.shadowBlur = 0;
-    });
-    
-    // Draw Pacman
-    const pacmanX = pacmanPosition.x * CELL_SIZE + CELL_SIZE / 2;
-    const pacmanY = pacmanPosition.y * CELL_SIZE + CELL_SIZE / 2;
-    const pacmanRadius = CELL_SIZE / 2 - 2;
-    
-    // Glow effect
-    effectsCtx.shadowBlur = 15;
-    effectsCtx.shadowColor = COLORS.pacman;
-    
-    effectsCtx.fillStyle = COLORS.pacman;
-    effectsCtx.beginPath();
-    
-    // Calculate mouth angle based on direction and animation state
-    let startAngle = 0;
-    let endAngle = 2 * Math.PI;
-    
-    if (pacmanMouthOpen) {
-      switch (pacmanDirection) {
-        case 'RIGHT':
-          startAngle = 0.25 * Math.PI;
-          endAngle = 1.75 * Math.PI;
-          break;
-        case 'DOWN':
-          startAngle = 0.75 * Math.PI;
-          endAngle = 0.25 * Math.PI;
-          break;
-        case 'LEFT':
-          startAngle = 1.25 * Math.PI;
-          endAngle = 0.75 * Math.PI;
-          break;
-        case 'UP':
-          startAngle = 1.75 * Math.PI;
-          endAngle = 1.25 * Math.PI;
-          break;
-      }
-    }
-    
-    effectsCtx.arc(pacmanX, pacmanY, pacmanRadius, startAngle, endAngle);
-    effectsCtx.lineTo(pacmanX, pacmanY);
-    effectsCtx.fill();
-    
-    // Add light trail effect
-    if (gameState === 'PLAYING') {
-      effectsCtx.globalAlpha = 0.3;
-      effectsCtx.fillStyle = COLORS.pacman;
-      
-      // Draw trail based on direction
-      let trailX = pacmanX;
-      let trailY = pacmanY;
-      
-      switch (pacmanDirection) {
-        case 'RIGHT':
-          trailX -= CELL_SIZE / 2;
-          break;
-        case 'DOWN':
-          trailY -= CELL_SIZE / 2;
-          break;
-        case 'LEFT':
-          trailX += CELL_SIZE / 2;
-          break;
-        case 'UP':
-          trailY += CELL_SIZE / 2;
-          break;
-      }
-      
-      effectsCtx.beginPath();
-      effectsCtx.arc(trailX, trailY, pacmanRadius / 2, 0, 2 * Math.PI);
-      effectsCtx.fill();
-      effectsCtx.globalAlpha = 1.0;
-    }
-    
-    effectsCtx.shadowBlur = 0;
-    
-    // Draw ghosts
-    ghosts.forEach((ghost) => {
-      const ghostX = ghost.position.x * CELL_SIZE + CELL_SIZE / 2;
-      const ghostY = ghost.position.y * CELL_SIZE + CELL_SIZE / 2;
-      
-      // Glow effect
-      effectsCtx.shadowBlur = 10;
-      effectsCtx.shadowColor = ghost.frightened ? '#2121DE' : ghost.color;
-      
-      // Set ghost color based on state
-      effectsCtx.fillStyle = ghost.frightened ? '#2121DE' : ghost.color;
-      
-      // Ghost body
-      effectsCtx.globalAlpha = ghost.frightened ? 0.7 : 0.9;
-      effectsCtx.beginPath();
-      effectsCtx.arc(ghostX, ghostY, CELL_SIZE / 2 - 2, Math.PI, 0, false);
-      
-      // Ghost "skirt"
-      const skirtHeight = CELL_SIZE / 4;
-      effectsCtx.lineTo(ghostX + CELL_SIZE / 2 - 2, ghostY + skirtHeight);
-      
-      // Create wavy bottom
-      for (let i = 0; i < 3; i++) {
-        effectsCtx.quadraticCurveTo(
-          ghostX + CELL_SIZE / 2 - 2 - ((CELL_SIZE / 3) * (i + 1)),
-          ghostY + (i % 2 === 0 ? skirtHeight - 2 : skirtHeight + 2),
-          ghostX + CELL_SIZE / 2 - 2 - ((CELL_SIZE / 3) * (i + 1)) - CELL_SIZE / 6,
-          ghostY + skirtHeight
-        );
-      }
-      
-      effectsCtx.lineTo(ghostX - CELL_SIZE / 2 + 2, ghostY);
-      effectsCtx.fill();
-      
-      // Ghost eyes
-      effectsCtx.globalAlpha = 1.0;
-      effectsCtx.fillStyle = '#FFFFFF';
-      
-      const eyeOffset = CELL_SIZE / 6;
-      const eyeRadius = CELL_SIZE / 8;
-      
-      // Left eye
-      effectsCtx.beginPath();
-      effectsCtx.arc(ghostX - eyeOffset, ghostY - eyeOffset / 2, eyeRadius, 0, 2 * Math.PI);
-      effectsCtx.fill();
-      
-      // Right eye
-      effectsCtx.beginPath();
-      effectsCtx.arc(ghostX + eyeOffset, ghostY - eyeOffset / 2, eyeRadius, 0, 2 * Math.PI);
-      effectsCtx.fill();
-      
-      // Eye pupils (looking in movement direction)
-      effectsCtx.fillStyle = '#000000';
-      
-      let pupilOffsetX = 0;
-      let pupilOffsetY = 0;
-      
-      switch (ghost.direction) {
-        case 'RIGHT':
-          pupilOffsetX = eyeRadius / 2;
-          break;
-        case 'LEFT':
-          pupilOffsetX = -eyeRadius / 2;
-          break;
-        case 'DOWN':
-          pupilOffsetY = eyeRadius / 2;
-          break;
-        case 'UP':
-          pupilOffsetY = -eyeRadius / 2;
-          break;
-      }
-      
-      // Left pupil
-      effectsCtx.beginPath();
-      effectsCtx.arc(
-        ghostX - eyeOffset + pupilOffsetX,
-        ghostY - eyeOffset / 2 + pupilOffsetY,
-        eyeRadius / 2,
-        0,
-        2 * Math.PI
-      );
-      effectsCtx.fill();
-      
-      // Right pupil
-      effectsCtx.beginPath();
-      effectsCtx.arc(
-        ghostX + eyeOffset + pupilOffsetX,
-        ghostY - eyeOffset / 2 + pupilOffsetY,
-        eyeRadius / 2,
-        0,
-        2 * Math.PI
-      );
-      effectsCtx.fill();
-      
-      effectsCtx.shadowBlur = 0;
-    });
-    
-    // Power-up overlay effect
-    if (powerUp.active) {
-      effectsCtx.fillStyle = 
-        powerUp.type === 'POWER_PELLET' 
-          ? 'rgba(0, 0, 255, 0.1)' 
-          : powerUp.type === 'SPEED' 
-            ? 'rgba(0, 255, 0, 0.1)' 
-            : 'rgba(255, 255, 0, 0.1)';
+        switch (cell) {
+          case 'wall':
+            // Draw wall with glow effect
+            ctx.fillStyle = colors.wall;
+            ctx.shadowBlur = 5;
+            ctx.shadowColor = colors.wall;
+            ctx.fillRect(cellX, cellY, CELL_SIZE, CELL_SIZE);
+            ctx.shadowBlur = 0;
+            break;
             
-      effectsCtx.fillRect(0, 0, canvas.width, canvas.height);
-      
-      // Add time remaining indicator
-      const timePercentage = powerUp.timeRemaining / POWER_UP_DURATION;
-      effectsCtx.fillStyle = 'rgba(255, 255, 255, 0.7)';
-      effectsCtx.fillRect(
-        canvas.width / 4,
-        canvas.height - 10,
-        (canvas.width / 2) * timePercentage,
-        5
-      );
-    }
-    
-    // Restore context after zoom
-    ctx.restore();
-    effectsCtx.restore();
-    
-    // Draw mini-map
-    const miniMapScale = 0.2;
-    miniMapCanvas.width = canvasWidth * miniMapScale;
-    miniMapCanvas.height = canvasHeight * miniMapScale;
-    
-    miniMapCtx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-    miniMapCtx.fillRect(0, 0, miniMapCanvas.width, miniMapCanvas.height);
-    
-    // Draw walls on mini-map
-    miniMapCtx.fillStyle = COLORS.maze[selectedMaze as keyof typeof COLORS.maze] || COLORS.maze.default;
-    for (let y = 0; y < mazeSize.height; y++) {
-      for (let x = 0; x < mazeSize.width; x++) {
-        if (mazeData[y][x] === 1) {
-          miniMapCtx.fillRect(
-            x * CELL_SIZE * miniMapScale,
-            y * CELL_SIZE * miniMapScale,
-            CELL_SIZE * miniMapScale,
-            CELL_SIZE * miniMapScale
-          );
+          case 'dot':
+            // Draw dot
+            ctx.fillStyle = colors.dot;
+            ctx.beginPath();
+            ctx.arc(
+              cellX + CELL_SIZE / 2,
+              cellY + CELL_SIZE / 2,
+              CELL_SIZE / 10,
+              0,
+              Math.PI * 2
+            );
+            ctx.fill();
+            break;
+            
+          case 'energizer':
+            // Draw energizer with pulsing effect
+            const pulseSize = (Math.sin(Date.now() / 200) + 1) * 2 + 4;
+            ctx.fillStyle = colors.energizer;
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = colors.energizer;
+            ctx.beginPath();
+            ctx.arc(
+              cellX + CELL_SIZE / 2,
+              cellY + CELL_SIZE / 2,
+              pulseSize,
+              0,
+              Math.PI * 2
+            );
+            ctx.fill();
+            ctx.shadowBlur = 0;
+            break;
+            
+          case 'fruit':
+            // Draw fruit (cherry)
+            ctx.fillStyle = colors.fruit;
+            ctx.beginPath();
+            ctx.arc(
+              cellX + CELL_SIZE / 2 - 2,
+              cellY + CELL_SIZE / 2,
+              CELL_SIZE / 4,
+              0,
+              Math.PI * 2
+            );
+            ctx.fill();
+            
+            ctx.fillStyle = '#00FF00';
+            ctx.fillRect(
+              cellX + CELL_SIZE / 2,
+              cellY + CELL_SIZE / 3,
+              CELL_SIZE / 8,
+              CELL_SIZE / 4
+            );
+            break;
         }
-      }
-    }
-    
-    // Draw pacman on mini-map
-    miniMapCtx.fillStyle = COLORS.pacman;
-    miniMapCtx.beginPath();
-    miniMapCtx.arc(
-      pacmanPosition.x * CELL_SIZE * miniMapScale + (CELL_SIZE * miniMapScale) / 2,
-      pacmanPosition.y * CELL_SIZE * miniMapScale + (CELL_SIZE * miniMapScale) / 2,
-      CELL_SIZE * miniMapScale,
-      0,
-      2 * Math.PI
-    );
-    miniMapCtx.fill();
-    
-    // Draw ghosts on mini-map
-    ghosts.forEach((ghost) => {
-      miniMapCtx.fillStyle = ghost.frightened ? '#2121DE' : ghost.color;
-      miniMapCtx.beginPath();
-      miniMapCtx.arc(
-        ghost.position.x * CELL_SIZE * miniMapScale + (CELL_SIZE * miniMapScale) / 2,
-        ghost.position.y * CELL_SIZE * miniMapScale + (CELL_SIZE * miniMapScale) / 2,
-        CELL_SIZE * miniMapScale,
-        0,
-        2 * Math.PI
-      );
-      miniMapCtx.fill();
+      });
     });
-    
-    // Request next frame
-    requestAnimationFrame(draw);
-  }, [mazeData, mazeSize, pacmanPosition, pacmanDirection, pacmanMouthOpen, ghosts, dots, powerPellets, powerUp, cameraZoom, selectedMaze]);
-
-  // Start the game
-  const startGame = useCallback(() => {
-    setGameState('PLAYING');
-    
-    // Start game loop
-    if (!gameLoopRef.current) {
-      gameLoopRef.current = setInterval(gameTick, GAME_SPEED);
-    }
-    
-    // Start mouth animation
-    if (!mouthAnimationRef.current) {
-      mouthAnimationRef.current = setInterval(() => {
-        setPacmanMouthOpen((prev) => !prev);
-      }, 200);
-    }
-  }, [gameTick]);
-
-  // Pause the game
-  const pauseGame = useCallback(() => {
-    setGameState('PAUSED');
-    
-    // Clear game loop
-    if (gameLoopRef.current) {
-      clearInterval(gameLoopRef.current);
-      gameLoopRef.current = null;
-    }
-  }, []);
-
-  // Resume the game
-  const resumeGame = useCallback(() => {
-    setGameState('PLAYING');
-    
-    // Start game loop
-    if (!gameLoopRef.current) {
-      gameLoopRef.current = setInterval(gameTick, GAME_SPEED);
-    }
-  }, [gameTick]);
-
-  // Toggle camera zoom for overview
-  const toggleCameraZoom = useCallback(() => {
-    setCameraZoom((prev) => (prev === 1 ? 0.8 : 1));
-  }, []);
-
-  // Handle keyboard events
-  const handleKeyDown = useCallback(
-    (e: KeyboardEvent) => {
-      if (gameState === 'GAME_OVER') return;
-      
-      switch (e.key) {
-        case 'ArrowUp':
-        case 'w':
-        case 'W':
-          setPacmanNextDirection('UP');
-          break;
-        case 'ArrowDown':
-        case 's':
-        case 'S':
-          setPacmanNextDirection('DOWN');
-          break;
-        case 'ArrowLeft':
-        case 'a':
-        case 'A':
-          setPacmanNextDirection('LEFT');
-          break;
-        case 'ArrowRight':
-        case 'd':
-        case 'D':
-          setPacmanNextDirection('RIGHT');
-          break;
-        case ' ':
-          // Space bar - pause/resume
-          if (gameState === 'PLAYING') {
-            pauseGame();
-          } else if (gameState === 'PAUSED') {
-            resumeGame();
-          } else if (gameState === 'IDLE' || gameState === 'GAME_OVER') {
-            startGame();
-          }
-          break;
-        case 'z':
-        case 'Z':
-          // Z key - toggle camera zoom
-          toggleCameraZoom();
-          break;
-      }
-    },
-    [gameState, pauseGame, resumeGame, startGame, toggleCameraZoom]
-  );
-
-  // Color utility functions
-  const shadeColor = (color: string, percent: number): string => {
-    let R = parseInt(color.substring(1, 3), 16);
-    let G = parseInt(color.substring(3, 5), 16);
-    let B = parseInt(color.substring(5, 7), 16);
-
-    R = Math.floor(R * (100 + percent) / 100);
-    G = Math.floor(G * (100 + percent) / 100);
-    B = Math.floor(B * (100 + percent) / 100);
-
-    R = R < 255 ? R : 255;
-    G = G < 255 ? G : 255;
-    B = B < 255 ? B : 255;
-
-    R = R > 0 ? R : 0;
-    G = G > 0 ? G : 0;
-    B = B > 0 ? B : 0;
-
-    const RR = R.toString(16).padStart(2, '0');
-    const GG = G.toString(16).padStart(2, '0');
-    const BB = B.toString(16).padStart(2, '0');
-
-    return `#${RR}${GG}${BB}`;
-  };
-
-  const lightenColor = (color: string, percent: number): string => {
-    return shadeColor(color, percent);
-  };
+  }, [maze, colors]);
 
   // Initialize game on mount
   useEffect(() => {
@@ -968,86 +1022,117 @@ const PacmanGame: React.FC<PacmanGameProps> = ({ selectedMaze = 'classic' }) => 
     // Add keyboard event listener
     window.addEventListener('keydown', handleKeyDown);
     
-    // Cleanup on unmount
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
       
-      if (gameLoopRef.current) {
-        clearInterval(gameLoopRef.current);
-      }
-      
-      if (mouthAnimationRef.current) {
-        clearInterval(mouthAnimationRef.current);
-      }
-      
-      if (powerUpTimerRef.current) {
-        clearTimeout(powerUpTimerRef.current);
-      }
+      // Clean up timers
+      if (frightenedTimer) clearTimeout(frightenedTimer);
+      if (levelCompleteTimer) clearTimeout(levelCompleteTimer);
+      if (gameOverTimer) clearTimeout(gameOverTimer);
+      if (animationFrameId) cancelAnimationFrame(animationFrameId);
     };
-  }, [initGame, handleKeyDown]);
+  }, [
+    initGame, 
+    handleKeyDown, 
+    frightenedTimer, 
+    levelCompleteTimer, 
+    gameOverTimer, 
+    animationFrameId
+  ]);
+
+  // Draw the game on canvas
+  useEffect(() => {
+    drawGame();
+  }, [drawGame, maze, pacmanPosition, ghosts]);
+
+  // Handle virtual controls for mobile
+  const handleVirtualControl = useCallback((direction: Direction) => {
+    if (gameStatus === 'PLAYING') {
+      setPacmanNextDirection(direction);
+    } else if (gameStatus === 'IDLE' || gameStatus === 'GAME_OVER') {
+      startGame();
+    }
+  }, [gameStatus, startGame]);
 
   return (
     <div className="flex flex-col items-center">
       <div className="mb-4 flex flex-col sm:flex-row justify-between w-full items-center">
         <div className="flex flex-col items-center sm:items-start mb-2 sm:mb-0">
-          <p className="font-pixel text-neon-yellow text-base">Score: {score}</p>
-          <p className="font-pixel text-neon-blue text-xs">High Score: {highScore}</p>
+          <p className="font-pixel text-neon-green text-base">Score: {score}</p>
+          <p className="font-pixel text-neon-yellow text-xs">High Score: {highScore}</p>
         </div>
         
         <div className="flex flex-col items-center sm:items-end">
-          <div className="flex gap-2">
-            {Array.from({ length: lives }).map((_, i) => (
-              <span key={i} className="text-neon-yellow text-base">●</span>
-            ))}
-          </div>
-          <p className="font-pixel text-xs text-white">Level: {level}</p>
+          <p className="font-pixel text-neon-pink text-xs">Level: {level}</p>
+          <p className="font-pixel text-xs text-white">Lives: {lives}</p>
         </div>
       </div>
       
       <div 
         className="relative border-4 rounded-lg overflow-hidden shadow-lg"
         style={{ 
-          borderColor: COLORS.maze[selectedMaze as keyof typeof COLORS.maze] || COLORS.maze.default,
-          boxShadow: `0 0 20px ${COLORS.maze[selectedMaze as keyof typeof COLORS.maze] || COLORS.maze.default}, 0 0 30px ${COLORS.maze[selectedMaze as keyof typeof COLORS.maze] || COLORS.maze.default} inset`,
+          borderColor: colors.wall,
+          boxShadow: `0 0 20px ${colors.wall}, 0 0 30px ${colors.wall} inset`,
+          width: CANVAS_WIDTH + 8, // Add 8 for border
+          height: CANVAS_HEIGHT + 8 // Add 8 for border
         }}
       >
         {/* Background Canvas */}
         <canvas 
-          ref={mainCanvasRef} 
-          className="bg-black"
+          ref={canvasRef} 
+          width={CANVAS_WIDTH} 
+          height={CANVAS_HEIGHT}
+          className="bg-black absolute top-0 left-0"
         />
         
-        {/* Effects Canvas (overlaid) */}
-        <canvas 
-          ref={effectsCanvasRef} 
+        {/* SVG Overlay for Pacman and Ghosts */}
+        <svg 
+          ref={svgRef}
+          width={CANVAS_WIDTH} 
+          height={CANVAS_HEIGHT}
           className="absolute top-0 left-0"
           style={{ mixBlendMode: 'lighten' }}
-        />
-        
-        {/* Mini-map */}
-        <div className="absolute top-4 right-4 border border-white/20 rounded">
-          <canvas 
-            ref={miniMapCanvasRef} 
-            className="opacity-70 hover:opacity-100 transition-opacity"
+        >
+          {/* Pacman */}
+          <Pacman 
+            x={pacmanPosition.x * CELL_SIZE - CELL_SIZE / 2}
+            y={pacmanPosition.y * CELL_SIZE - CELL_SIZE / 2}
+            direction={pacmanDirection === 'none' ? 'right' : pacmanDirection}
+            mouthOpen={pacmanMouthOpen}
+            isEnergized={pacmanEnergized}
+            size={CELL_SIZE * 1.5}
           />
-        </div>
+          
+          {/* Ghosts */}
+          {ghosts.map((ghost, index) => (
+            <Ghost 
+              key={index}
+              x={ghost.position.x * CELL_SIZE - CELL_SIZE / 2}
+              y={ghost.position.y * CELL_SIZE - CELL_SIZE / 2}
+              color={ghost.color}
+              direction={ghost.direction === 'none' ? 'right' : ghost.direction}
+              isScared={ghost.mode === 'frightened'}
+              size={CELL_SIZE * 1.5}
+            />
+          ))}
+        </svg>
         
-        {gameState === 'IDLE' && (
+        {gameStatus === 'IDLE' && (
           <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/70 z-10">
-            <h3 className="text-3xl font-pixel mb-6 animate-pulse text-neon-yellow">
-              PAC-MAN
+            <h3 className="text-3xl font-pixel mb-6 animate-pulse"
+                style={{ color: colors.energizer }}>
+              PACMAN
             </h3>
             <p className="text-white mb-6 text-center px-4">
-              Use arrow keys or WASD to navigate the maze.<br/>
-              Collect all dots to complete the level.<br/>
-              Power pellets let you eat ghosts!<br/>
-              Press Z for zoom overview.
+              Use arrow keys or WASD to control Pacman.<br/>
+              Eat all dots to complete the level.<br/>
+              Energizers let you eat ghosts!
             </p>
             <Button 
               onClick={startGame}
               className="font-pixel"
               style={{ 
-                background: COLORS.pacman,
+                background: colors.energizer,
                 color: 'black'
               }}
             >
@@ -1056,9 +1141,9 @@ const PacmanGame: React.FC<PacmanGameProps> = ({ selectedMaze = 'classic' }) => 
           </div>
         )}
         
-        {gameState === 'PAUSED' && (
+        {gameStatus === 'PAUSED' && (
           <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/70 z-10">
-            <h3 className="text-3xl font-pixel text-neon-blue mb-6">PAUSED</h3>
+            <h3 className="text-3xl font-pixel text-neon-yellow mb-6">PAUSED</h3>
             <Button 
               onClick={resumeGame}
               className="bg-neon-yellow text-black hover:bg-neon-yellow/80 font-pixel"
@@ -1068,30 +1153,38 @@ const PacmanGame: React.FC<PacmanGameProps> = ({ selectedMaze = 'classic' }) => 
           </div>
         )}
         
-        {gameState === 'GAME_OVER' && (
+        {gameStatus === 'GAME_OVER' && (
           <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/70 z-10">
             <h3 className="text-3xl font-pixel text-neon-pink mb-6">GAME OVER</h3>
             <p className="text-white mb-2">Your Score: {score}</p>
             <p className="text-neon-yellow mb-6">High Score: {highScore}</p>
             <Button 
-              onClick={() => { initGame(); startGame(); }}
+              onClick={startGame}
               className="bg-neon-pink text-black hover:bg-neon-pink/80 font-pixel mb-2"
             >
               Play Again
             </Button>
           </div>
         )}
+        
+        {gameStatus === 'LEVEL_COMPLETE' && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/70 z-10">
+            <h3 className="text-3xl font-pixel text-neon-green mb-6">LEVEL COMPLETE!</h3>
+            <p className="text-white mb-2">Score: {score}</p>
+            <p className="text-neon-yellow mb-6">Next Level: {level + 1}</p>
+          </div>
+        )}
       </div>
       
       <div className="mt-6 flex gap-2">
-        {gameState === 'PLAYING' ? (
+        {gameStatus === 'PLAYING' ? (
           <Button 
             onClick={pauseGame}
             className="bg-neon-yellow hover:bg-neon-yellow/80 text-black font-pixel"
           >
             Pause
           </Button>
-        ) : gameState === 'PAUSED' ? (
+        ) : gameStatus === 'PAUSED' ? (
           <Button 
             onClick={resumeGame}
             className="bg-neon-green hover:bg-neon-green/80 text-black font-pixel"
@@ -1103,7 +1196,7 @@ const PacmanGame: React.FC<PacmanGameProps> = ({ selectedMaze = 'classic' }) => 
             onClick={startGame}
             className="bg-neon-green hover:bg-neon-green/80 text-black font-pixel"
           >
-            {gameState === 'GAME_OVER' ? 'Play Again' : 'Start Game'}
+            {typeof gameStatus === 'string' && (gameStatus === "LEVEL_COMPLETE" || gameStatus === "GAME_OVER") ? 'Play Again' : 'Start Game'}
           </Button>
         )}
         
@@ -1114,14 +1207,6 @@ const PacmanGame: React.FC<PacmanGameProps> = ({ selectedMaze = 'classic' }) => 
         >
           Reset
         </Button>
-        
-        <Button 
-          onClick={toggleCameraZoom}
-          variant="outline" 
-          className="border-neon-purple text-neon-purple hover:bg-neon-purple/20 font-pixel"
-        >
-          {cameraZoom === 1 ? 'Zoom Out' : 'Zoom In'}
-        </Button>
       </div>
       
       <div className="mt-8">
@@ -1129,8 +1214,8 @@ const PacmanGame: React.FC<PacmanGameProps> = ({ selectedMaze = 'classic' }) => 
           {/* Virtual controls for mobile */}
           <div className="invisible"></div>
           <Button 
-            onClick={() => handleKeyDown({ key: 'ArrowUp' } as KeyboardEvent)}
-            className="bg-neon-blue/30 hover:bg-neon-blue/50 p-2 rounded-lg w-12 h-12 flex items-center justify-center"
+            onClick={() => handleVirtualControl('up')}
+            className="bg-neon-green/30 hover:bg-neon-green/50 p-2 rounded-lg w-12 h-12 flex items-center justify-center"
             aria-label="Up"
           >
             ▲
@@ -1138,22 +1223,30 @@ const PacmanGame: React.FC<PacmanGameProps> = ({ selectedMaze = 'classic' }) => 
           <div className="invisible"></div>
           
           <Button 
-            onClick={() => handleKeyDown({ key: 'ArrowLeft' } as KeyboardEvent)}
-            className="bg-neon-blue/30 hover:bg-neon-blue/50 p-2 rounded-lg w-12 h-12 flex items-center justify-center"
+            onClick={() => handleVirtualControl('left')}
+            className="bg-neon-green/30 hover:bg-neon-green/50 p-2 rounded-lg w-12 h-12 flex items-center justify-center"
             aria-label="Left"
           >
             ◄
           </Button>
           <Button 
-            onClick={() => handleKeyDown({ key: ' ' } as KeyboardEvent)}
+            onClick={() => {
+              if (gameStatus === 'PLAYING') {
+                pauseGame();
+              } else if (gameStatus === 'PAUSED') {
+                resumeGame();
+              } else {
+                startGame();
+              }
+            }}
             className="bg-neon-yellow/30 hover:bg-neon-yellow/50 p-2 rounded-lg w-12 h-12 flex items-center justify-center"
             aria-label="Pause/Play"
           >
             ■
           </Button>
           <Button 
-            onClick={() => handleKeyDown({ key: 'ArrowRight' } as KeyboardEvent)}
-            className="bg-neon-blue/30 hover:bg-neon-blue/50 p-2 rounded-lg w-12 h-12 flex items-center justify-center"
+            onClick={() => handleVirtualControl('right')}
+            className="bg-neon-green/30 hover:bg-neon-green/50 p-2 rounded-lg w-12 h-12 flex items-center justify-center"
             aria-label="Right"
           >
             ►
@@ -1161,8 +1254,8 @@ const PacmanGame: React.FC<PacmanGameProps> = ({ selectedMaze = 'classic' }) => 
           
           <div className="invisible"></div>
           <Button 
-            onClick={() => handleKeyDown({ key: 'ArrowDown' } as KeyboardEvent)}
-            className="bg-neon-blue/30 hover:bg-neon-blue/50 p-2 rounded-lg w-12 h-12 flex items-center justify-center"
+            onClick={() => handleVirtualControl('down')}
+            className="bg-neon-green/30 hover:bg-neon-green/50 p-2 rounded-lg w-12 h-12 flex items-center justify-center"
             aria-label="Down"
           >
             ▼
@@ -1172,7 +1265,7 @@ const PacmanGame: React.FC<PacmanGameProps> = ({ selectedMaze = 'classic' }) => 
       </div>
       
       <div className="mt-6 text-center text-xs text-gray-500">
-        <p>Use keyboard arrows or WASD to move. Space to pause/resume. Z to toggle zoom view.</p>
+        <p>Use keyboard arrows or WASD to move</p>
       </div>
     </div>
   );
